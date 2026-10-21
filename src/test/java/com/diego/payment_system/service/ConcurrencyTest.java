@@ -12,7 +12,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.math.BigDecimal;
@@ -93,8 +95,18 @@ class ConcurrencyTest extends BaseIntegrationTest {
         return clientRepository.save(client);
     }
 
-    private  void authenticateClient(Long clientId, String email){
-        ClientPrincipal principal = new ClientPrincipal(clientId, email, "hashedpass"
-                , List.of(new SimpleGrantedAuthority("ROLE_CLIENT")));
+    private void authenticateClient(Long clientId, String email) {
+        ClientPrincipal principal = new ClientPrincipal(
+                clientId,
+                email,
+                "hashedpass",
+                List.of(new SimpleGrantedAuthority("ROLE_CLIENT"))
+        );
+        var authentication = new UsernamePasswordAuthenticationToken(
+                principal,
+                null,
+                principal.getAuthorities()
+        );
+        SecurityContextHolder.getContext().setAuthentication(authentication);
     }
 }
