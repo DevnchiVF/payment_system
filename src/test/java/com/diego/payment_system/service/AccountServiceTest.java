@@ -15,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -50,8 +51,9 @@ class AccountServiceTest extends BaseIntegrationTest {
     }
 
     @Test
-    void createAccount_persist_and_links_to_client_without_requiring_ownership_check(){
+    void createAccount_persists_for_authenticated_owner(){
         Client client = createAndSaveClient("12345678", "diego@test.com");
+        authenticateClient(client.getId(), client.getEmail());
         AccountResponse response = accountService.createAccount(client.getId());
 
         assertThat(response.id()).isNotNull();
@@ -78,6 +80,7 @@ class AccountServiceTest extends BaseIntegrationTest {
     @Test
     void withdraw_insufficient_funds_throws_exception_and_does_not_alter_db_balance(){
         Client client = createAndSaveClient("11223344", "retiro@test.com");
+        authenticateClient(client.getId(), client.getEmail());
         AccountResponse createdAccount = accountService.createAccount(client.getId());
         accountService.deposit(createdAccount.id(), new DepositRequest(new BigDecimal("50.00")),
                 UUID.randomUUID().toString());
@@ -91,9 +94,16 @@ class AccountServiceTest extends BaseIntegrationTest {
 
     }
 
-    private  void authenticateClient(Long clientId, String email){
-        ClientPrincipal principal = new ClientPrincipal(clientId, email, "hashedpass"
-                , List.of(new SimpleGrantedAuthority("ROLE_CLIENT")));
+    private void authenticateClient(Long clientId, String email) {
+        ClientPrincipal principal = new ClientPrincipal(clientId, email, "hashedpass",
+                List.of(new SimpleGrantedAuthority("ROLE_CLIENT"))
+        );
+        var authentication = new UsernamePasswordAuthenticationToken(
+                principal,
+                null,
+                principal.getAuthorities()
+        );
+        SecurityContextHolder.getContext().setAuthentication(authentication);
     }
 
     private Client createAndSaveClient(String dni, String email) {

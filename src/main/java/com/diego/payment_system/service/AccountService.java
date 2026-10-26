@@ -1,14 +1,12 @@
 package com.diego.payment_system.service;
 
 import com.diego.payment_system.domain.*;
-import com.diego.payment_system.domain.event.TransactionCompletedEvent;
 import com.diego.payment_system.dto.*;
 import com.diego.payment_system.exception.InsufficientFundsException;
 import com.diego.payment_system.exception.RateLimitException;
 import com.diego.payment_system.exception.ResourceNotFoundException;
 import com.diego.payment_system.repository.AccountRepository;
 import com.diego.payment_system.repository.ClientRepository;
-import com.diego.payment_system.repository.TransactionFeatureRepository;
 import com.diego.payment_system.repository.TransactionRepository;
 import com.diego.payment_system.security.SecurityUtils;
 import io.github.bucket4j.ConsumptionProbe;
@@ -16,7 +14,6 @@ import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -39,8 +36,6 @@ public class AccountService {
     private final SecurityUtils securityUtils;
     private final RateLimiterService rateLimiterService;
     private static final Logger log = LoggerFactory.getLogger(AccountService.class);
-    private final ApplicationEventPublisher eventPublisher;
-    private final TransactionFeatureRepository featureRepository;
 
     public AccountResponse createAccount(Long clientId){
 
@@ -58,6 +53,7 @@ public class AccountService {
 
         Account account = accountRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Account not found with id: " + id));
+        checkOwnership(account);
 
         return toResponse(account);
     }
@@ -130,12 +126,6 @@ public class AccountService {
 
         try {
             Transaction saved = transactionRepository.save(tx);
-            eventPublisher.publishEvent(new TransactionCompletedEvent(
-                    saved.getId(),
-                    source.getId(),
-                    request.amount(),
-                    saved.getTimestamp()
-            ));
             return toTransactionResponse(saved);
         } catch (DataIntegrityViolationException e) {
             log.warn("Race condition on idempotency key={}, fetching existing", idempotencyKey);
@@ -216,22 +206,6 @@ public class AccountService {
         }
     }
 
-    public Page<TransactionFeatureResponse> getFeatures(Long accountId, Pageable pageable) {
-        Account account = accountRepository.findById(accountId)
-                .orElseThrow(() -> new ResourceNotFoundException("Account not found: " + accountId));
-        checkOwnership(account);
-
-        return featureRepository.findByAccountId(accountId, pageable)
-                .map(f -> new TransactionFeatureResponse(
-                        f.getTransactionId(),
-                        f.getAmount(),
-                        f.getHourOfDay(),
-                        f.getRecentTxCount(),
-                        f.getAmountToAvgRatio(),
-                        f.getCreatedAt()
-                ));
-    }
-
     private AccountResponse toResponse(Account account){
         ClientResponse clientResponse = new ClientResponse(
                 account.getClient().getId(),
@@ -253,9 +227,16 @@ public class AccountService {
     }
 
     private TransactionHistoryResponse toHistoryResponse(Transaction tx, Long accountId) {
-        String direction = tx.getTargetAccount().getId().equals(accountId)
-                ? "INBOUND"
-                : "OUTBOUND";
+        String direction;
+        if (tx.getType() == TransactionType.DEPOSIT) {
+            direction = "INBOUND";
+        } else if (tx.getType() == TransactionType.WITHDRAWAL) {
+            direction = "OUTBOUND";
+        } else {
+            direction = tx.getTargetAccount() != null && tx.getTargetAccount().getId().equals(accountId)
+                    ? "INBOUND"
+                    : "OUTBOUND";
+        }
         return new TransactionHistoryResponse(
                 tx.getId(), tx.getAmount(), tx.getType(),
                 tx.getStatus(), direction, tx.getTimestamp()
